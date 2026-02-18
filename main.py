@@ -10,12 +10,51 @@ hands = mp_hands.Hands(max_num_hands=2)
 mp_draw = mp.solutions.drawing_utils
 
 cap = cv2.VideoCapture(0)
-cap.set(3, 640)
-cap.set(4, 480)
+cap.set(3, 1280)
+cap.set(4, 720)
 
 # ===== HELPER =====
 def finger_up(hand_landmarks, tip_id, pip_id):
     return hand_landmarks.landmark[tip_id].y < hand_landmarks.landmark[pip_id].y
+
+# ===== PARTICLE SYSTEM =====
+particles = []
+
+def spawn_edge_particles(center, radius, color, amount, speed_range):
+    for _ in range(amount):
+        angle = random.uniform(0, 2 * math.pi)
+
+        # posisi di tepi lingkaran
+        x = center[0] + math.cos(angle) * radius
+        y = center[1] + math.sin(angle) * radius
+
+        speed = random.uniform(*speed_range)
+
+        particles.append({
+            "x": x,
+            "y": y,
+            "vx": math.cos(angle) * speed,
+            "vy": math.sin(angle) * speed,
+            "life": random.randint(15, 30),
+            "color": color
+        })
+
+def update_particles(img):
+    for p in particles[:]:
+        p["x"] += p["vx"]
+        p["y"] += p["vy"]
+        p["life"] -= 1
+
+        if p["life"] > 0:
+            alpha = p["life"] / 30
+            color = (
+                int(p["color"][0] * alpha),
+                int(p["color"][1] * alpha),
+                int(p["color"][2] * alpha)
+            )
+            cv2.circle(img, (int(p["x"]), int(p["y"])), 2, color, -1)
+        else:
+            particles.remove(p)
 
 # ===== STATE =====
 purple_active = False
@@ -25,23 +64,7 @@ purple_pos = None
 charge_radius = 0
 max_radius = 120
 explosion_radius = 0
-max_explosion = 500
-
-red_particles = []
-blue_particles = []
-purple_particles = []
-
-# ===== PARTICLES =====
-def update_particles(particles, img):
-    for p in particles[:]:
-        p["x"] += p["vx"]
-        p["y"] += p["vy"]
-        p["life"] -= 1
-
-        if p["life"] > 0:
-            cv2.circle(img, (int(p["x"]), int(p["y"])), 3, p["color"], -1)
-        else:
-            particles.remove(p)
+max_explosion = 600
 
 # ===== MAIN LOOP =====
 while True:
@@ -88,39 +111,42 @@ while True:
             # ===== RED =====
             if label == "Right" and only_index and not purple_active:
                 red_pos = (x, y)
-                overlay = img.copy()
                 radius = 60 + pulse
 
+                overlay = img.copy()
                 for i in range(3):
                     cv2.circle(overlay, red_pos, radius + i*15, (0,0,255), -1)
-
                 img = cv2.addWeighted(overlay, 0.2, img, 0.8, 0)
                 cv2.circle(img, red_pos, radius, (0,0,255), -1)
+
+                spawn_edge_particles(red_pos, radius, (0,0,255), 3, (1,3))
 
             # ===== BLUE =====
             if label == "Left" and only_index and not purple_active:
                 blue_pos = (x, y)
-                overlay = img.copy()
                 radius = 60 + pulse
 
+                overlay = img.copy()
                 for i in range(3):
                     cv2.circle(overlay, blue_pos, radius + i*15, (255,0,0), -1)
-
                 img = cv2.addWeighted(overlay, 0.2, img, 0.8, 0)
                 cv2.circle(img, blue_pos, radius, (255,0,0), -1)
 
-            # ===== CONTROL =====
+                spawn_edge_particles(blue_pos, radius, (255,0,0), 3, (1,3))
+
             if two_fingers:
                 two_finger_pos = (x, y)
 
-            # ===== TRIGGER EXPLOSION =====
             if fist and purple_active and not purple_exploding:
                 purple_exploding = True
                 explosion_radius = charge_radius
 
     # ===== MERGE =====
     if not purple_active and red_pos and blue_pos:
-        distance = math.hypot(red_pos[0]-blue_pos[0], red_pos[1]-blue_pos[1])
+        distance = math.hypot(
+            red_pos[0] - blue_pos[0],
+            red_pos[1] - blue_pos[1]
+        )
         if distance < 100:
             purple_active = True
             purple_pos = (
@@ -138,43 +164,29 @@ while True:
         if charge_radius < max_radius:
             charge_radius += 4
 
-        overlay = img.copy()
         radius = charge_radius + pulse
 
+        overlay = img.copy()
         for i in range(4):
             cv2.circle(overlay, purple_pos, radius + i*25, (255,0,255), -1)
 
         img = cv2.addWeighted(overlay, 0.15, img, 0.85, 0)
         cv2.circle(img, purple_pos, radius, (255,0,255), -1)
 
+        spawn_edge_particles(purple_pos, radius, (255,0,255), 6, (2,4))
+
     # ===== PURPLE EXPLOSION =====
     if purple_exploding:
 
-        explosion_radius += 40
+        explosion_radius += 50
 
         overlay = img.copy()
-
         for i in range(5):
-            cv2.circle(
-                overlay,
-                purple_pos,
-                explosion_radius + i*40,
-                (255,0,255),
-                -1
-            )
+            cv2.circle(overlay, purple_pos, explosion_radius + i*40, (255,0,255), -1)
 
         img = cv2.addWeighted(overlay, 0.25, img, 0.75, 0)
 
-        # BIG PARTICLE BURST
-        for _ in range(20):
-            purple_particles.append({
-                "x": purple_pos[0],
-                "y": purple_pos[1],
-                "vx": random.uniform(-8,8),
-                "vy": random.uniform(-8,8),
-                "life": 40,
-                "color": (255,0,255)
-            })
+        spawn_edge_particles(purple_pos, explosion_radius, (255,0,255), 20, (4,8))
 
         if explosion_radius > max_explosion:
             purple_active = False
@@ -183,14 +195,14 @@ while True:
             charge_radius = 0
             explosion_radius = 0
 
-    update_particles(purple_particles, img)
+    update_particles(img)
 
-    cv2.imshow("Hollow Purple - BLAST MODE", img)
+    cv2.imshow("Hollow Purple - Clean Energy Mode", img)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
-    if cv2.getWindowProperty("Hollow Purple - BLAST MODE", cv2.WND_PROP_VISIBLE) < 1:
+    if cv2.getWindowProperty("Hollow Purple - Clean Energy Mode", cv2.WND_PROP_VISIBLE) < 1:
         break
 
 cap.release()
